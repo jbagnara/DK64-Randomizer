@@ -18,7 +18,7 @@ import traceback
 import time
 import typing
 from client.common import DK64MemoryMap, create_task_log_exception, check_version
-from client.pj64 import PJ64Client
+from client.ares import AresClient as PJ64Client
 from client.items import item_ids, item_names_to_id
 from client.check_flag_locations import location_flag_to_name, location_name_to_flag
 from client.ap_check_ids import check_id_to_name, check_names_to_id
@@ -431,9 +431,9 @@ class DK64Client:
 
     async def reset_auth(self):
         """Reset the auth by looking up a username from ROM."""
-        username = self.n64_client.read_bytestring(0x1FF3000 + 0xB0000000, 16).strip()
+        username = self.n64_client.read_bytestring(0x1FF3000 + 0xB0000000, 16)
         # Strip all trailing \x00
-        username = username.replace("\x00", "")
+        username = username.rstrip(b"\x00")
         self.auth = username
 
     def started_file(self):
@@ -1153,7 +1153,8 @@ class DK64Context(CommonContext):
             except Exception as e:
                 print(e)
                 logger.error(f"Exception in game loop: {e}")
-                await asyncio.sleep(1.0)
+                traceback.print_exc()
+                sys.exit(0)
 
 
 def launch():
