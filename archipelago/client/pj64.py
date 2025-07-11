@@ -107,14 +107,13 @@ class PJ64Client:
         if not self._is_exe_running(os.path.basename(executable)):
             # Request the user to provide their ROM
             rom = open_filename("Select ROM", (("N64 ROM", (".n64", ".z64", ".v64")),))
-            logger.info(f"wine {executable} {rom}")
             if rom:
                 if self.platform_type is Platform.WINDOWS:
                     os.popen(f'"{executable}" "{rom}"')
                 elif self.platform_type is Platform.LINUX:
                     # Assume wine with default prefix
                     if shutil.which("wine") is not None:
-                        os.popen(f'wine "{executable}" "{rom}"')
+                        print("asdf") ##os.popen(f'wine "{executable}" "{rom}"')
                     else:
                         raise PJ64Exception("Could not find wine executable")
 
@@ -198,6 +197,8 @@ class PJ64Client:
         else:
             self.port = int(config.get("Debugger", "ap_port"))
 
+
+        self.port = 9123
         # Step 4: Final sanitize before write
         sanitize_config(config)
         # Print the config to the console for debugging
@@ -228,7 +229,8 @@ class PJ64Client:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(0.1)
         try:
-            self.socket.connect((self.address, self.port))
+            print(f"{self.address} 9123")
+            self.socket.connect((self.address, 9123))
             self.connected_message = True
         except (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError) as e:
             self.socket = None
@@ -241,6 +243,7 @@ class PJ64Client:
     def _send_command(self, command):
         """Send a command to the emulator and retrieves the response."""
         try:
+            import pdb; pdb.set_trace()
             self._connect()
             command_id = str(uuid.uuid4())  # Generate a unique ID for the command
             full_command = f"{command_id}:{command}\n"  # Append line terminator

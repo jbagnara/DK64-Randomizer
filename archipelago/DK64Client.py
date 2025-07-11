@@ -101,6 +101,7 @@ class DK64Client:
         """Validate the client connection."""
         if not self.memory_pointer:
             self.memory_pointer = self.n64_client.read_u32(DK64MemoryMap.memory_pointer)
+        print(f'The real address is {self.memory_pointer + DK64MemoryMap.connection}')
         self.n64_client.write_u8(self.memory_pointer + DK64MemoryMap.connection, 0xFF)
 
     def send_message(self, item_name, player_name, event_type="from"):
@@ -431,10 +432,11 @@ class DK64Client:
 
     async def reset_auth(self):
         """Reset the auth by looking up a username from ROM."""
-        username = self.n64_client.read_bytestring(0x1FF3000 + 0xB0000000, 16)
+        username = self.n64_client.read_bytestring(0x1FF3000 + 0xB0000000, 16).strip()
         # Strip all trailing \x00
-        username = username.rstrip(b"\x00")
+        username = username.replace("\x00", "")
         self.auth = username
+        print(f'username: {username}')
 
     def started_file(self):
         """Check if the file has been started."""

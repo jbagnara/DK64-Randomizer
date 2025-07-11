@@ -22,6 +22,8 @@ for (var i = 0; i < lines.length; i++) {
     }
 }
 
+port = 9123;
+
 var ip = "127.0.0.1";
 function startServer() {
     console.log("Starting server...");

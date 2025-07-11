@@ -8,13 +8,15 @@ logger = logging.getLogger(__name__)
 
 # https://sourceware.org/gdb/current/onlinedocs/gdb.html/Overview.html#Overview
 
+# Per discussion at https://github.com/NationalSecurityAgency/ghidra/discussions/6787 ares >=142 required
+
 class AresClient:
     lead = '$'
 
     def __init__(self):
         """Initialize a new instance of the class."""
         self.address = "127.0.0.1"
-        self.port = 9123
+        self.port = 9124
         self._check_client()
         self.socket = None
         self.connected_message = False
@@ -31,7 +33,7 @@ class AresClient:
         rom = open_filename("Select ROM", (("N64 ROM", (".n64", ".z64", ".v64")),))
 
         # TODO Check if ares is running!!!
-        os.popen(f'ares "{rom}"')
+        os.popen(f'/home/jason/projects/ares/build/rundir/bin/ares "{rom}"')
         sleep(5)
 
     def _connect(self):
@@ -49,7 +51,6 @@ class AresClient:
             self.sock.connect(("127.0.0.1", 9123))
             self.sock.settimeout(0.1)
         try:
-            print(f"{self.address} 9123")
             self.sock.connect((self.address, 9123))
             self.connected_message = True
         except (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError) as e:
@@ -65,7 +66,13 @@ class AresClient:
         #    logger.debug(byte.to_bytes().decode())
 
         status = self.sock.send(payload)
-        print(status)
+        logger.info(f'Sent {payload}')
+        return status
+
+    def sockRecv(self, length):
+        ret = self.sock.recv(length)
+        logger.info(f'Received {ret}')
+        return ret
 
     def _sendack(self):
         payload = bytearray('+'.encode())
@@ -73,11 +80,37 @@ class AresClient:
 
     def _recack(self):
         try:
-            rec = self.sock.recv(1)
+            rec = self.sockRecv(1)
         except Exception as e:
             print(e)
         #if rec != '+':
         #    raise Exception("Nope!!!!!")
+
+    def _cmdstart(self):
+        status = self.sockSend(bytearray('$'.encode()))
+
+    def _getchecksum(self, buf: bytearray):
+        checksum = 0
+        for byte in buf:
+            checksum += int(byte)
+        
+        return checksum % 2**8
+
+    def _readWord(self, addr: int):
+        self._cmdstart()
+        cmd = f'm{addr:08x},4'
+        payload = bytearray(cmd, 'utf-8')
+        checksum = self._getchecksum(payload)
+
+        self.sockSend(payload)
+        payload = bytearray(f'#{checksum:02x}', 'utf-8')
+        self.sockSend(payload)
+        self._recack()
+
+        rec = self.sockRecv(12)
+        self._sendack()
+
+        return rec[1:-3]
 
     def _read(self, addr: int, size: int):
         """
@@ -85,28 +118,47 @@ class AresClient:
             https://sourceware.org/gdb/current/onlinedocs/gdb.html/Packets.html#index-m-packet
         """
 
-        status = self.sockSend(bytearray('$'.encode()))
+        # Memory reads MUST be word aligned
+        if size not in (1, 2, 4, 8):
+            rec_buf = bytearray()
 
-        cmd = f'm{addr:08x},{size}'
-        buf = bytearray(cmd, 'utf - 8')
-        
-        checksum = 0
-        for byte in buf:
-            checksum += int(byte)
+            offset = 0
+            while offset < size:
+                rec = self._readWord(addr + offset)
+                bytearr = bytearray(rec)
 
-        payload = bytearray(cmd.encode())
-        status = self.sockSend(payload)
+                # Toss unneeded bytes
+                if offset + 4 > size:
+                    unused = size - (offset + 4)
+                    if unused > 0:
+                        bytearr = bytearr[:-unused]
 
-        payload = bytearray(f'#{checksum % 2**8:02x}', 'utf -8')
-        status = self.sockSend(payload)
-        self._recack()
+                rec_buf += bytearr
+                offset += 4
 
-        rec = self.sock.recv(1 + size*2 + 3)
-        self._sendack()
-        print(rec)
+            ret = rec_buf
+            print(f'Final receive: {ret}')
+                
+        # Bulk read
+        else:
+            self._cmdstart()       
 
-        #TODO check checksum
-        return rec[1:-3]
+            cmd = f'm{addr:08x},{size}'
+            payload = bytearray(cmd.encode())
+            checksum = self._getchecksum(payload)
+
+            status = self.sockSend(payload)
+
+            payload = bytearray(f'#{checksum:02x}', 'utf-8')
+            status = self.sockSend(payload)
+            self._recack()
+
+            rec = self.sockRecv(1 + size*2 + 3)
+            self._sendack()
+
+            ret = rec[1:-3]
+
+        return ret
 
 
     def _write(self, addr: int, size: int, data: bytearray):
@@ -119,17 +171,18 @@ class AresClient:
                 size (int): # of bytes to write
         """
 
+        logger.info(f'Attempting to write {bytes(data)} to {addr:016x}')
+        self._cmdstart()
+
         cmd = f'M{addr:08x},{size}'
-        buf = bytearray(cmd, 'utf - 8')
-        
-        checksum = 0
-        for byte in buf:
-            checksum += int(byte)
-        
-        payload = bytearray(cmd.encode())
+        payload = bytearray(cmd, 'utf-8')
         self.sockSend(payload)
         
-        payload = bytearray(f'#{checksum % 2**8:02x}', 'utf -8')
+        checksum = 0
+        for byte in payload:
+            checksum += int(byte)
+        
+        payload = bytearray(f'#{checksum % 2**8:02x}', 'utf-8')
         self.sockSend(payload)
 
         self._recack
@@ -141,35 +194,47 @@ class AresClient:
         payload = data
         self.sockSend(payload)
 
-        payload = bytearray(f'#{checksum % 2**8:02x}', 'utf -8')
+        payload = bytearray(f'#{checksum % 2**8:02x}', 'utf-8')
         self.sockSend(payload)
-
-        print()
         self._recack()
+
+        #TODO I think the ares gdb server goes crazy when you write
+        # $OK#9a
+        ok = self.sockRecv(6)
+        self._sendack()
+
+        # $#00
+        self._recack()
+        idk = self.sockRecv(4)
+        self._sendack()
+        self._sendack()
+        self._sendack()
 
         return True
 
     def read_u8(self, address):
         """Read an 8-bit unsigned integer from memory."""
-        return int.from_bytes(self._read(addr=address, size=1))
+        return int(self._read(addr=address, size=1), 16)
 
     def read_u16(self, address):
         """Read a 16-bit unsigned integer from memory."""
-        return int.from_bytes(self._read(addr=address, size=2))
+        return int(self._read(addr=address, size=2), 16)
 
     def read_u32(self, address):
         """Read a 32-bit unsigned integer from memory."""
-        return int.from_bytes(self._read(addr=address, size=4))
+        return int(self._read(addr=address, size=4), 16)
 
     def read_dict(self, dict):
+        print("AAAAAAAHHHHHHHHHHHH")
         logger.warn("READ_DICT NOT IMPLEMENTED")
 
     def read_bytestring(self, address, size):
         """Read a bytestring from memory."""
-        ret = self._read(addr=address, size=size)
-        print(type(ret))
-        logger.info("Read bytestring: {ret:08x}")
-        return ret
+        bytearr = bytes(self._read(addr=address, size=size))
+
+        # Disgusting!
+        bytestr = bytes.fromhex(bytearr.decode('utf-8')).decode('latin1')
+        return bytestr
 
     def _write_memory(self, command, address, data):
         """Write data to memory and returns the emulator response."""
